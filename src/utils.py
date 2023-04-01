@@ -321,7 +321,7 @@ def koji_connect(koji_config, authenticate, proxyuser=None):
                 if opt in koji_config:
                     kwargs[opt] = koji_config[opt]
 
-            session.krb_login(proxyuser=proxyuser, **kwargs)
+            session.gssapi_login(proxyuser=proxyuser, **kwargs)
     try:
         version = session.getAPIVersion()
     except xmlrpc_client.ProtocolError:
