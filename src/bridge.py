@@ -177,7 +177,7 @@ def urlopen(url):
     Return (file, file size).  Raise ForwardingError.
 
     '''
-    r = requests.get(url, stream=True)  # nosec
+    r = requests.get(url, stream=True, timeout=60.0)  # nosec
     try:
         size = int(r.headers['content-length'])
     except KeyError:
