@@ -1425,6 +1425,11 @@ def bridge_one_request(config, server_listen_sock, client_listen_sock):
                 client_sock.close()
         finally:
             server_sock.close()
+    # Python 3.10 made this a deprecated alias of TimeoutError so it's only a matter of
+    # time before they remove this alias and break everyone. Replace this with TimeoutError
+    # when upgrading to support Python 3.10+
+    except socket.timeout:
+        logging.exception('Socket timeout occurred')
     except InvalidRequestError as e:
         logging.warning('Invalid request: %s', str(e))
     except InvalidReplyError as e:
@@ -1447,6 +1452,8 @@ def bridge_one_request(config, server_listen_sock, client_listen_sock):
 
 
 def main():
+    # Any blocking socket operations time out after an hour
+    socket.setdefaulttimeout(60 * 60)
     options = utils.get_daemon_options('A signing server bridge',
                                        '~/.sigul/bridge.conf')
     utils.setup_logging(options, 'bridge')

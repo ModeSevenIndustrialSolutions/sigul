@@ -1927,6 +1927,8 @@ def handle_global_options():
 
 
 def main():
+    # Any blocking socket operations time out after an hour
+    socket.setdefaulttimeout(60 * 60)
     child_exception = None
     try:
         (config, handler, args) = handle_global_options()

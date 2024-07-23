@@ -2731,7 +2731,7 @@ def request_handling_child(config):
     except InvalidRequestError as e:
         logging.warning('Invalid request: %s', str(e))
     except (IOError, socket.error) as e:
-        logging.info('I/O error: %s', repr(e))
+        logging.exception('I/O error: %s', repr(e))
     except nss.error.NSPRError as e:
         if e.errno == nss.error.PR_CONNECT_RESET_ERROR:
             logging.debug('NSPR error: Connection reset')
@@ -2759,6 +2759,8 @@ def request_handling_child(config):
 
 
 def main():
+    # Any blocking socket operations time out after an hour
+    socket.setdefaulttimeout(60 * 60)
     options = utils.get_daemon_options('A signing server',
                                        '~/.sigul/server.conf')
     utils.setup_logging(options, 'server')
