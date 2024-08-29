@@ -74,6 +74,8 @@ else:
 MAX_FAST_RECONNECTIONS = 5
 FAST_RECONNECTION_SECONDS = 5
 SLOW_RECONNECTION_SECONDS = 60
+# How long to wait for the request handler before killing it
+CHILD_TIMEOUT_SECS = 60 * 60
 
 # Infrastructure
 
@@ -2695,6 +2697,7 @@ request_handlers[None] = RequestHandler(unknown_request_handler,
 _CHILD_OK = 0                   # Handled a request
 _CHILD_CONNECTION_REFUSED = 1   # Connection to the bridge was refused
 _CHILD_BUG = 2                  # A bug in the child
+_CHILD_TIMEOUT = 3              # Request handler timed out and was killed
 # Undefined values are treated as _CHILD_BUG:
 
 
@@ -2758,6 +2761,10 @@ def request_handling_child(config):
     return _CHILD_OK
 
 
+def sigalarm_handler(*args):
+    sys.exit(_CHILD_TIMEOUT)
+
+
 def main():
     # Any blocking socket operations time out after an hour
     socket.setdefaulttimeout(60 * 60)
@@ -2785,6 +2792,9 @@ def main():
                 child_pid = os.fork()
                 if child_pid == 0:
                     try:
+                        # Kill the child process if it fails to finish in an hour
+                        signal.signal(signal.SIGALRM, sigalarm_handler)
+                        signal.alarm(CHILD_TIMEOUT_SECS)
                         status = request_handling_child(config)
                         logging.shutdown()
                         os._exit(status)
@@ -2805,6 +2815,8 @@ def main():
                     else:
                         time.sleep(SLOW_RECONNECTION_SECONDS)
                         fast_reconnections_done = 0
+                elif os.WIFEXITED(status) and os.WEXITSTATUS(status) == _CHILD_TIMEOUT:
+                    logging.warning("Child timed out handling request and was killed")
                 else:  # _CHILD_BUG, unknown status code or WIFSIGNALED
                     logging.error('Child died with status %d', status)
                     break
