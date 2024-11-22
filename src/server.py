@@ -1988,7 +1988,7 @@ class TempNSSDb(object):
         return open(pw_r, mode='r', closefd=True)
 
     def prepare_pwfile(self):
-        return self.prepare_secretfile(self._db_pass.encode('utf-8'))
+        return self.prepare_secretfile(self._db_pass.encode('utf-8') + b'\n')
 
     def execute_certutil(self, args):
         pw_r = self.prepare_pwfile()
@@ -2018,7 +2018,7 @@ class TempNSSDb(object):
 
     def add_pkcs12(self, pkcs12_bytes, passphrase):
         pw_r = self.prepare_pwfile()
-        pk12_pass_r = self.prepare_secretfile(passphrase.encode('utf-8'))
+        pk12_pass_r = self.prepare_secretfile(passphrase.encode('utf-8') + b'\n')
 
         # pk12util will not read the actual PKCS12 contents from a pipe, so
         # instead just write those to a temporary (nameless) file.
