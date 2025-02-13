@@ -25,6 +25,7 @@ from six import StringIO
 import shutil
 import subprocess
 import tempfile
+from urllib import parse
 
 from cryptography import x509
 import cryptography.hazmat.primitives.asymmetric.ec
@@ -119,6 +120,14 @@ class Key(object):
         self.keytype = keytype
         self.fingerprint = fingerprint
 
+    def pkcs11_token_name(self):
+        if self.keytype != KeyTypeEnum.PKCS11:
+            raise ValueError("The key type must be PKCS11")
+        token_name = [
+            param for param in self.fingerprint.split(";") if param.startswith("token=")
+        ].pop()
+        return parse.unquote(token_name.split("=", maxsplit=1)[1])
+
 
 class KeyAccess(object):
 
@@ -162,12 +171,15 @@ class KeyTypeEnum(enum.Enum):
     gnupg = 1
     ECC = 2
     RSA = 3
+    #: Technically this is more about _where_ it's stored, but so is gnupg.
+    #: We assume the user wants to do pesigning with it.
+    PKCS11 = 4
 
     def supports_ca(self):
         return self != KeyTypeEnum.gnupg
 
     def supports_pe(self):
-        return self == KeyTypeEnum.RSA
+        return self in (KeyTypeEnum.RSA, KeyTypeEnum.PKCS11)
 
 
 sa = sqlalchemy

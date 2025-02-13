@@ -1624,6 +1624,8 @@ def cmd_delete_key(db, conn):
     key = key_by_name(db, conn)
     if key.keytype == KeyTypeEnum.gnupg:
         server_common.gpg_delete_key(conn.config, key.fingerprint)
+    elif key.keytype == KeyTypeEnum.PKCS11:
+        pass
     else:
         remove_non_gnupg_key(conn.config, key.fingerprint)
     for a in key.key_accesses:
@@ -2049,9 +2051,97 @@ class TempNSSDb(object):
 @request_handler(payload_storage=RequestHandler.PAYLOAD_FILE)
 def cmd_sign_pe(db, conn):
     (access, key_passphrase) = conn.authenticate_user(db)
-    if not access.key.keytype.supports_pe():
+    if access.key.keytype == KeyTypeEnum.RSA:
+        sign_pe(conn, access, key_passphrase)
+    elif access.key.keytype == KeyTypeEnum.PKCS11:
+        sign_pe_pkcs11(conn, access, key_passphrase)
+    else:
         conn.send_error(errors.UNSUPPORTED_KEYTYPE)
 
+
+def sign_pe_pkcs11(conn, access, key_passphrase):
+    """
+    Sign a PE application using PKCS#11.
+
+    For this to work properly, the following things must be true:
+
+      - The PKCS#11 module that contains the token the key is in must be
+        configured via p11-kit.
+
+      - The sigul user must be able to access the token; this may vary by
+        module. For example, the sigul user needs to own the softhsm2 directory
+        if you use that module (which you should not do in production).
+
+      - The certificate for the key pair must also be in the token, and it must
+        have a label applied to it that matches the cert name provided here. It
+        must also have an id that matches the private key.
+
+    At this time, there are no remote commands to manage PKCS#11 keys or certificates,
+    and the keys and certificates must be set up using other tools (pkcs11-tool, for
+    example).
+
+    To make Sigul aware of the signing key and the PIN to access it, the
+    `server_add_pkcs11_token.py` script is provided.
+    """
+    # This corresponds to the label applied to the certificate in the token
+    cert_name = conn.safe_outer_field("cert-name")
+    logging.info("sign_pe_pkcs11: signing request using '%s' received", cert_name)
+
+    token_name = access.key.pkcs11_token_name()
+    logging.info("sign_pe_pkcs11: using key '%s' in '%s' token", access.key.fingerprint, token_name)
+
+    # We don't actually load anything into the NSS database, but pesign talks to
+    # the PKCS11 token through it.
+    nssdir = TempNSSDb()
+    pw_r = nssdir.prepare_secretfile(key_passphrase.encode('utf-8') + b'\n')
+    signature_file = tempfile.TemporaryFile()
+    try:
+        with tempfile.TemporaryFile() as signature_file:
+            subprocess.run(
+                [
+                    "/usr/bin/pesign",
+                    "--sign",
+                    "--in", conn.payload_file.name,
+                    "--out", f"/dev/fd/{signature_file.fileno()}",
+                    "--force",
+                    "--certdir", nssdir.db_dir,
+                    "--certificate", cert_name,
+                    "--nofork",
+                    "--pinfile", f"/dev/fd/{pw_r.fileno()}",
+                    "--token", token_name,
+                ],
+                check=True,
+                stdin=subprocess.DEVNULL,
+                pass_fds=(
+                    pw_r.fileno(),
+                    signature_file.fileno(),
+                ),
+                timeout=60,
+                capture_output=True,
+            )
+            logging.info(
+                "Signed PE file with key %s, certificate %s",
+                access.key.name,
+                cert_name,
+            )
+
+            conn.send_reply_header(errors.OK, {})
+            conn.send_reply_payload_from_file(signature_file)
+    except subprocess.TimeoutExpired:
+        logging.error("pesign command timed out")
+        conn.send_reply_header(errors.UNKNOWN_ERROR, {})
+    except subprocess.CalledProcessError as err:
+        logging.error(
+            "Command failed: %s returned %d (stderr=%s, stdout=%s)",
+            err.cmd,
+            err.returncode,
+            err.stderr,
+            err.stdout
+        )
+        conn.send_reply_header(errors.UNKNOWN_ERROR, {})
+
+
+def sign_pe(conn, access, key_passphrase):
     privkey = non_gnupg_private_key(
         conn.config,
         access.key.fingerprint,
