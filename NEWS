@@ -1,3 +1,13 @@
+Changes in version 1.3:
+- Add AuthorityKeyIdentifier extension if missing from certificates
+- Switch Koji authentication from krb_login to gssapi_login
+- Add a timeout of 60 seconds to HTTP requests
+- Add a default timeout to socket objects
+- Configure an alarm on the server to kill requests that hang
+- Ensure password files passed to pesign end in a newline
+- Add the ability to sign PE applications via PKCS#11
+- Add a database migration for PKCS11 key types
+
 Changes in version 1.2:
 - Implemented the RSA keytype
 - Implemented RPM Head Signing
