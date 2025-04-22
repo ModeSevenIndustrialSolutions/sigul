@@ -1,3 +1,7 @@
+Changes in 1.4:
+- Install the new sigul_server_add_pkcs11_token script
+- Install the database migrations
+
 Changes in version 1.3:
 - Add AuthorityKeyIdentifier extension if missing from certificates
 - Switch Koji authentication from krb_login to gssapi_login
