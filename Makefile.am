@@ -35,7 +35,7 @@ endif
 bin_SCRIPTS = src/sigul
 dist_bin_SCRIPTS = src/sigul_setup_client
 sbin_SCRIPTS = src/sigul_bridge src/sigul_server src/sigul_server_add_admin \
-	src/sigul_server_create_db
+	src/sigul_server_create_db src/sigul_server_add_pkcs11_token
 dist_config_DATA = config/bridge.conf config/client.conf config/server.conf
 man_MANS = doc/sigul.1 doc/sigul_bridge.8 doc/sigul_server.8 \
 	doc/sigul_server_add_admin.8 doc/sigul_server_create_db.8
@@ -46,7 +46,7 @@ python_PYTHON = src/bridge.py \
 	src/double_tls.py \
 	src/errors.py \
 	src/server.py src/server_add_admin.py src/server_common.py src/server_gpg.py \
-	src/server_create_db.py \
+	src/server_create_db.py src/server_add_pkcs11_token.py \
 	src/utils.py
 nodist_python_PYTHON = src/settings.py
 
@@ -141,6 +141,14 @@ src/sigul_server_create_db: src/script.in Makefile
 		< $(srcdir)/src/script.in > $@
 	chmod a+x $@
 
+src/sigul_server_add_pkcs11_token: src/script.in Makefile
+	$(MKDIR_P) src
+	sed -e 's|@''PYTHON''@|$(PYTHON)|g' \
+		-e 's|@''pkgdatadir''@|$(pkgdatadir)|g' \
+		-e 's|@''program''@|server_add_pkcs11_token|g' \
+		< $(srcdir)/src/script.in > $@
+	chmod a+x $@
+
 clean-local:
 	$(SHELL) $(top_srcdir)/tests/testsuite --clean
 
@@ -154,8 +162,10 @@ installcheck-local: atconfig $(top_srcdir)/tests/testsuite
 
 install-data-local:
 	$(MKDIR_P) $(DESTDIR)$(logdir) $(DESTDIR)$(piddir) \
-		$(DESTDIR)$(serverdatadir)/gnupg
+		$(DESTDIR)$(serverdatadir)/gnupg $(DESTDIR)$(pkgdatadir)/migrations
 	chmod 0700 $(DESTDIR)$(serverdatadir) $(DESTDIR)$(serverdatadir)/gnupg
+	install -m 0644 dbschema_v10_to_v11.sql $(DESTDIR)$(pkgdatadir)/migrations/
+	install -m 0644 dbschema_v11_to_v12.sql $(DESTDIR)$(pkgdatadir)/migrations/
 
 $(top_srcdir)/tests/package.m4: $(top_srcdir)/configure.ac
 	{								   \
