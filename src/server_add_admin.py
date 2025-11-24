@@ -17,6 +17,7 @@
 
 import logging
 import sys
+import traceback
 
 import server_common
 import utils
@@ -38,43 +39,85 @@ def main():
     options = utils.optparse_parse_options_only(parser)
 
     logging.basicConfig(format='%(levelname)s: %(message)s',
-                        level=utils.logging_level_from_options(options))
+                        level=logging.DEBUG)  # Force DEBUG level for troubleshooting
+    logging.info('🔧 [ADD_ADMIN] Starting server_add_admin')
+    logging.info('🔧 [ADD_ADMIN] Batch mode: %s', options.batch)
     try:
+        logging.info('🔧 [ADD_ADMIN] Loading configuration from: %s', options.config_file)
         config = AddAdminConfiguration(options.config_file)
+        logging.info('✅ [ADD_ADMIN] Configuration loaded successfully')
     except utils.ConfigurationError as e:
+        logging.error('🔴 [ADD_ADMIN] Configuration error: %s', e)
+        traceback.print_exc()
         sys.exit(str(e))
     config.batch_mode = options.batch
     try:
+        logging.info('🔧 [ADD_ADMIN] Setting user/group IDs')
         utils.set_regid(config)
         utils.set_reuid(config)
         utils.update_HOME_for_uid(config)
-    except Exception:
-        # The failing function has already logged the exception
+        logging.info('✅ [ADD_ADMIN] User/group IDs set successfully')
+    except Exception as e:
+        logging.error('🔴 [ADD_ADMIN] Failed to set user/group IDs: %s', e)
+        traceback.print_exc()
         sys.exit(1)
 
     try:
+        logging.info('🔧 [ADD_ADMIN] Initializing NSS')
         utils.nss_init(config)
+        logging.info('✅ [ADD_ADMIN] NSS initialized successfully')
     except utils.NSSInitError as e:
+        logging.error('🔴 [ADD_ADMIN] NSS initialization failed: %s', e)
+        traceback.print_exc()
         sys.exit(str(e))
 
     if options.name is not None:
         name = options.name
+        logging.info('🔧 [ADD_ADMIN] Using admin name from command line: %r', name)
     else:
         # readline import makes raw_input more usable.  Import only here to
         # avoid sending escape sequences to stdout when not interactive.
         import readline
         name = utils.input('Administrator user name: ')
+        logging.info('🔧 [ADD_ADMIN] Admin name from prompt: %r', name)
 
+    logging.info('🔧 [ADD_ADMIN] Reading password (batch_mode=%s)', config.batch_mode)
     password = utils.read_password(config, 'Administrator password: ')
+    logging.info('🔧 [ADD_ADMIN] Password received, length: %d', len(password))
+    logging.info('🔧 [ADD_ADMIN] Password repr: %r', password)
+    logging.info('🔧 [ADD_ADMIN] Password type: %s', type(password))
+    logging.info('🔧 [ADD_ADMIN] Password hex: %s', password.encode('utf-8').hex() if isinstance(password, str) else password.hex())
+    
     if not config.batch_mode:
+        logging.info('🔧 [ADD_ADMIN] Reading password confirmation (interactive mode)')
         p2 = utils.read_password(config, 'Administrator password (again): ')
         if password != p2:
+            logging.error('🔴 [ADD_ADMIN] Passwords do not match')
             sys.exit('Passwords don\'t match.')
+        logging.info('✅ [ADD_ADMIN] Password confirmation matched')
 
-    db = server_common.db_open(config)
-    user = server_common.User(name, clear_password=password, admin=True)
-    db.add(user)
-    db.commit()
+    try:
+        logging.info('🔧 [ADD_ADMIN] Opening database')
+        db = server_common.db_open(config)
+        logging.info('✅ [ADD_ADMIN] Database opened successfully')
+        
+        logging.info('🔧 [ADD_ADMIN] Creating User object for: %r', name)
+        user = server_common.User(name, clear_password=password, admin=True)
+        logging.info('✅ [ADD_ADMIN] User object created')
+        
+        logging.info('🔧 [ADD_ADMIN] Adding user to database')
+        db.add(user)
+        logging.info('✅ [ADD_ADMIN] User added to database session')
+        
+        logging.info('🔧 [ADD_ADMIN] Committing database transaction')
+        db.commit()
+        logging.info('✅ [ADD_ADMIN] Database transaction committed successfully')
+        
+        logging.info('🎉 [ADD_ADMIN] Admin user "%s" created successfully', name)
+    except Exception as e:
+        logging.error('🔴 [ADD_ADMIN] Failed to create admin user: %s', e)
+        traceback.print_exc()
+        raise
 
 
 if __name__ == '__main__':

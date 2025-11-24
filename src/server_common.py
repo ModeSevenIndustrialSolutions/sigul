@@ -101,13 +101,26 @@ class User(object):
         'abcdefghijklmnopqrstuvwxyz'
 
     def __set_clear_password(self, clear_password):
+        import logging
+        logging.info('🔐 [PASSWORD] Setting password for user: %s', self.name)
+        logging.info('🔐 [PASSWORD] Clear password length: %d', len(clear_password))
+        logging.info('🔐 [PASSWORD] Clear password repr: %r', clear_password)
+        logging.info('🔐 [PASSWORD] Clear password type: %s', type(clear_password))
+        
         random = nss.nss.generate_random(self.__salt_length)
         salt = '$6$'
         for i in range(self.__salt_length):
             salt += self.__salt_characters[random[i] %
                                            len(self.__salt_characters)]
-        self.sha512_password = crypt.crypt(
-            clear_password, salt).encode('utf-8')
+        
+        logging.info('🔐 [PASSWORD] Generated salt: %s', salt)
+        
+        hashed = crypt.crypt(clear_password, salt)
+        logging.info('🔐 [PASSWORD] Generated hash length: %d', len(hashed))
+        logging.info('🔐 [PASSWORD] Generated hash: %s', hashed)
+        
+        self.sha512_password = hashed.encode('utf-8')
+        logging.info('✅ [PASSWORD] Password hash stored successfully for user: %s', self.name)
     clear_password = property(fset=__set_clear_password,
                               doc='Setting this attribute updates '
                               'sha512_password')

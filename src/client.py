@@ -173,6 +173,22 @@ class ClientsConnection(object):
 
     def send_inner(self, inner_fields, omit_payload_auth=False):
         '''Send the inner header, including inner_fields.'''
+        import logging
+        logging.info('📤 [CLIENT_SEND] Sending inner header')
+        logging.info('📤 [CLIENT_SEND] Inner fields keys: %s', list(inner_fields.keys()))
+        
+        # Log password field if present (for debugging only)
+        if 'password' in inner_fields:
+            pwd = inner_fields['password']
+            logging.info('📤 [CLIENT_SEND] Password field present')
+            logging.info('📤 [CLIENT_SEND] Password type: %s', type(pwd))
+            logging.info('📤 [CLIENT_SEND] Password length: %d', len(pwd) if pwd else 0)
+            logging.info('📤 [CLIENT_SEND] Password repr: %r', pwd)
+            if isinstance(pwd, bytes):
+                logging.info('📤 [CLIENT_SEND] Password hex: %s', pwd.hex())
+            elif isinstance(pwd, str):
+                logging.info('📤 [CLIENT_SEND] Password hex: %s', pwd.encode('utf-8').hex())
+        
         # FIXME: handle errors.UNKNOWN_VERSION - there is no inner session and
         # outer session data is not all read
         fields = dict(inner_fields)  # Shallow copy
@@ -380,7 +396,13 @@ class ClientsConnection(object):
 
 def read_admin_password(config):
     '''Return an administrator's password.'''
-    return utils.read_password(config, 'Administrator\'s password: ')
+    import logging
+    logging.info('🔑 [CLIENT] Reading admin password')
+    password = utils.read_password(config, 'Administrator\'s password: ')
+    logging.info('🔑 [CLIENT] Admin password received, length: %d', len(password))
+    logging.info('🔑 [CLIENT] Admin password repr: %r', password)
+    logging.info('🔑 [CLIENT] Admin password type: %s', type(password))
+    return password
 
 
 def read_key_passphrase(config):
@@ -523,15 +545,24 @@ class SignRPMArgumentExaminer(object):
 
 # Command handlers
 def cmd_list_users(conn, args):
+    import logging
+    logging.info('👥 [CMD_LIST_USERS] Starting list-users command')
+    
     p2 = optparse.OptionParser(usage='%prog list-users',
                                description='List users')
     (_, args) = p2.parse_args(args)
     if len(args) != 0:
         p2.error('unexpected arguments')
+    
+    logging.info('👥 [CMD_LIST_USERS] Reading admin password')
     password = read_admin_password(conn.config)
+    logging.info('👥 [CMD_LIST_USERS] Password obtained for sending')
 
+    logging.info('👥 [CMD_LIST_USERS] Connecting to server')
     conn.connect('list-users', {})
     conn.empty_payload()
+    
+    logging.info('👥 [CMD_LIST_USERS] Sending inner header with password')
     conn.send_inner({'password': password})
     conn.read_response()
     print_list_in_payload(conn, 'num-users')
@@ -1932,12 +1963,20 @@ def main():
     child_exception = None
     try:
         (config, handler, args) = handle_global_options()
+        logging.info('🔌 [CLIENT_MAIN] Creating ClientsConnection')
         conn = ClientsConnection(config)
+        logging.info('✅ [CLIENT_MAIN] ClientsConnection created successfully')
+        logging.info('🎯 [CLIENT_MAIN] About to call command handler')
+        logging.info('🎯 [CLIENT_MAIN] Handler: %s', handler.__name__ if hasattr(handler, '__name__') else str(handler))
+        logging.info('🎯 [CLIENT_MAIN] Args: %s', args)
         try:
             handler(conn, args)
+            logging.info('✅ [CLIENT_MAIN] Handler completed successfully')
         finally:
+            logging.info('🔌 [CLIENT_MAIN] Closing connection')
             try:
                 conn.close()
+                logging.info('✅ [CLIENT_MAIN] Connection closed successfully')
             except (double_tls.ChildConnectionRefusedError,
                     double_tls.ChildUnrecoverableError) as e:
                 child_exception = e
@@ -1963,6 +2002,9 @@ def main():
             else:
                 logging.error('I/O error: NSPR connection reset')
         elif e.errno == nss.error.PR_END_OF_FILE_ERROR:
+            logging.error('🔴 [CLIENT_MAIN] Caught PR_END_OF_FILE_ERROR in main exception handler')
+            logging.error('🔴 [CLIENT_MAIN] This error originated from the connection/handler execution')
+            logging.error('🔴 [CLIENT_MAIN] Full stack trace:', exc_info=True)
             logging.error('I/O error: Unexpected EOF in NSPR')
         else:
             logging.error('NSPR error', exc_info=True)

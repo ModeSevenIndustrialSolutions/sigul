@@ -165,34 +165,96 @@ class _ForwardingBuffer(object):
         '''
         # The poll loop is simply two unidirectional forwarding poll loops
         # combined into one.
+        logging.info('🔄 [FORWARD] Starting forward_two_way loop')
+        logging.info('🔄 [FORWARD] buf_1 active: %s, buf_2 active: %s', buf_1._active, buf_2._active)
+        iteration = 0
         while buf_1._active or buf_2._active:
+            iteration += 1
+            logging.debug('🔄 [FORWARD] Iteration %d: buf_1 active=%s, buf_2 active=%s', 
+                         iteration, buf_1._active, buf_2._active)
             poll_descs = {}
-            buf_1._prepare_poll(poll_descs)
-            buf_2._prepare_poll(poll_descs)
+            try:
+                logging.debug('🔄 [FORWARD] Preparing poll for buf_1')
+                buf_1._prepare_poll(poll_descs)
+                logging.debug('🔄 [FORWARD] Preparing poll for buf_2')
+                buf_2._prepare_poll(poll_descs)
+            except Exception as e:
+                logging.error('🔴 [FORWARD] Error preparing poll: %s', e, exc_info=True)
+                raise
 
             _debug('Poll: %s',
                    ', '.join(['{0!s}:{1!s}'.format(_id(o), v)
                               for (o, v) in six.iteritems(poll_descs)]))
-            _nspr_poll(poll_descs, nss.io.PR_INTERVAL_NO_TIMEOUT)
+            logging.debug('🔄 [FORWARD] Calling _nspr_poll')
+            try:
+                _nspr_poll(poll_descs, nss.io.PR_INTERVAL_NO_TIMEOUT)
+            except nss.error.NSPRError as e:
+                logging.error('🔴 [FORWARD] _nspr_poll raised NSPRError: errno=%s, msg=%s', 
+                             e.errno, str(e), exc_info=True)
+                if e.errno == nss.error.PR_END_OF_FILE_ERROR:
+                    logging.error('🔴 [FORWARD] *** PR_END_OF_FILE_ERROR during poll ***')
+                    logging.error('🔴 [FORWARD] This means one of the sockets got EOF during polling')
+                    logging.error('🔴 [FORWARD] buf_1 active: %s, buf_2 active: %s', buf_1._active, buf_2._active)
+                raise
+            except Exception as e:
+                logging.error('🔴 [FORWARD] _nspr_poll raised unexpected exception: %s', e, exc_info=True)
+                raise
             _debug('-> %s', ', '.join(['{0!s}:{1!s}'.format(_id(o), v)
                                        for (o, v) in
                                        six.iteritems(poll_descs)]))
 
             # Handle I/O errors.
-            buf_1._handle_errors(poll_descs)
-            buf_2._handle_errors(poll_descs)
+            logging.debug('🔄 [FORWARD] Handling errors')
+            try:
+                buf_1._handle_errors(poll_descs)
+                buf_2._handle_errors(poll_descs)
+            except Exception as e:
+                logging.error('🔴 [FORWARD] Error in _handle_errors: %s', e, exc_info=True)
+                raise
+            
             # Send data.  First send, then receive - assuming the buffer is
             # completelly filled by a receive, sending first allows forwarding
             # BUFFER_LEN bytes in one iteration; receiving first would require
             # two iterations per BUFFER_LEN bytes.
-            buf_1._send(poll_descs)
-            buf_2._send(poll_descs)
+            logging.debug('🔄 [FORWARD] Sending data')
+            try:
+                buf_1._send(poll_descs)
+                buf_2._send(poll_descs)
+            except nss.error.NSPRError as e:
+                logging.error('🔴 [FORWARD] NSPRError in _send: errno=%s, msg=%s', e.errno, str(e), exc_info=True)
+                if e.errno == nss.error.PR_END_OF_FILE_ERROR:
+                    logging.error('🔴 [FORWARD] *** PR_END_OF_FILE_ERROR during send ***')
+                raise
+            except Exception as e:
+                logging.error('🔴 [FORWARD] Error in _send: %s', e, exc_info=True)
+                raise
+            
             # Receive data.
-            buf_1._receive(poll_descs)
-            buf_2._receive(poll_descs)
+            logging.debug('🔄 [FORWARD] Receiving data')
+            try:
+                buf_1._receive(poll_descs)
+                buf_2._receive(poll_descs)
+            except nss.error.NSPRError as e:
+                logging.error('🔴 [FORWARD] NSPRError in _receive: errno=%s, msg=%s', e.errno, str(e), exc_info=True)
+                if e.errno == nss.error.PR_END_OF_FILE_ERROR:
+                    logging.error('🔴 [FORWARD] *** PR_END_OF_FILE_ERROR during receive ***')
+                    logging.error('🔴 [FORWARD] This is the most common source of the error')
+                raise
+            except Exception as e:
+                logging.error('🔴 [FORWARD] Error in _receive: %s', e, exc_info=True)
+                raise
+            
             # Shut down the sending ends on EOF
-            buf_1._check_shutdown()
-            buf_2._check_shutdown()
+            logging.debug('🔄 [FORWARD] Checking shutdown')
+            try:
+                buf_1._check_shutdown()
+                buf_2._check_shutdown()
+            except Exception as e:
+                logging.error('🔴 [FORWARD] Error in _check_shutdown: %s', e, exc_info=True)
+                raise
+        
+        logging.info('✅ [FORWARD] forward_two_way loop completed normally')
+        logging.info('✅ [FORWARD] Total iterations: %d', iteration)
 
 
 class _CombiningBuffer(_ForwardingBuffer):
@@ -798,21 +860,43 @@ class DoubleTLSClient(object):
                     if first_error is None:
                         first_error = e
             if first_error is not None:
+                logging.error('🔴 [DOUBLE_TLS] First error detected before handshake: %s', first_error)
+                logging.error('🔴 [DOUBLE_TLS] First error type: %s', type(first_error))
                 if (isinstance(first_error, nss.error.NSPRError)
                         and (first_error.errno
                              == nss.error.PR_CONNECT_RESET_ERROR)):
+                    logging.error('🔴 [DOUBLE_TLS] Connection refused error')
                     raise ChildConnectionRefusedError()
+                logging.error('🔴 [DOUBLE_TLS] Re-raising first error', exc_info=True)
                 raise first_error
-            socket_fd.force_handshake()
+            
+            logging.info('🤝 [DOUBLE_TLS] Starting TLS handshake')
+            try:
+                socket_fd.force_handshake()
+                logging.info('✅ [DOUBLE_TLS] TLS handshake completed successfully')
+            except nss.error.NSPRError as e:
+                logging.error('🔴 [DOUBLE_TLS] TLS handshake failed: %s', e)
+                logging.error('🔴 [DOUBLE_TLS] NSPR error number: %s', e.errno)
+                logging.error('🔴 [DOUBLE_TLS] NSPR error string: %s', str(e))
+                logging.error('🔴 [DOUBLE_TLS] Stack trace:', exc_info=True)
+                raise
 
+            logging.info('🔧 [DOUBLE_TLS] Setting sockets to non-blocking mode')
             inner_pipe_fd.set_socket_option(
                 nss.io.PR_SockOpt_Nonblocking, True)
             outer_pipe_fd.set_socket_option(
                 nss.io.PR_SockOpt_Nonblocking, True)
             socket_fd.set_socket_option(nss.io.PR_SockOpt_Nonblocking, True)
+            logging.info('✅ [DOUBLE_TLS] Sockets set to non-blocking')
+            
+            logging.info('🔧 [DOUBLE_TLS] Creating forwarding buffers')
             buf_1 = _CombiningBuffer(inner_pipe_fd, outer_pipe_fd, socket_fd)
             buf_2 = _SplittingBuffer(socket_fd, inner_pipe_fd, outer_pipe_fd)
+            logging.info('✅ [DOUBLE_TLS] Buffers created, starting bidirectional forwarding')
+            
             _ForwardingBuffer.forward_two_way(buf_1, buf_2)
+            
+            logging.info('✅ [DOUBLE_TLS] Forwarding completed')
             inner_pipe_fd.close()
             outer_pipe_fd.close()
             socket_fd.close()
@@ -824,14 +908,23 @@ class DoubleTLSClient(object):
             logging.shutdown()
             os._exit(self.__connection_refused_exit_code)
         except nss.error.NSPRError as e:
+            logging.error('🔴 [DOUBLE_TLS] NSPR error in child process')
+            logging.error('🔴 [DOUBLE_TLS] Error number: %s', e.errno)
+            if e.errno == nss.error.PR_END_OF_FILE_ERROR:
+                logging.error('🔴 [DOUBLE_TLS] *** PR_END_OF_FILE_ERROR in child process ***')
+                logging.error('🔴 [DOUBLE_TLS] This occurred during the forwarding phase')
+            logging.error('🔴 [DOUBLE_TLS] Full stack trace:', exc_info=True)
+            logging.error('🔴 [DOUBLE_TLS] Error string: %s', str(e))
+            logging.error('🔴 [DOUBLE_TLS] Error details:', exc_info=True)
+            
             if e.errno == nss.error.PR_CONNECT_RESET_ERROR:
-                logging.debug('NSPR error: Connection reset')
+                logging.error('🔴 [DOUBLE_TLS] NSPR error: Connection reset')
             elif e.errno == nss.error.SSL_ERROR_EXPIRED_CERT_ALERT:
-                logging.error('Our certificate has been rejected as expired')
+                logging.error('🔴 [DOUBLE_TLS] Our certificate has been rejected as expired')
                 logging.shutdown()
                 os._exit(self.__unrecoverable_error_exit_code)
             else:
-                logging.warning('Exception in child', exc_info=True)
+                logging.error('🔴 [DOUBLE_TLS] Unhandled NSPR exception in child', exc_info=True)
             logging.shutdown()
             os._exit(1)  # Nothing that extraordinary
         except utils.NSSInitError as e:
@@ -872,6 +965,9 @@ class OuterBuffer(object):
         while len(res) < buf_size:
             run = self.__socket.recv(buf_size - len(res))
             if len(run) == 0:
+                logging.error('🔴 [DOUBLE_TLS] Unexpected EOF on _DoubleTLS outer buffer')
+                logging.error('🔴 [DOUBLE_TLS] Bytes read so far: %d, bytes needed: %d', 
+                            len(res), buf_size)
                 raise EOFError('Unexpected EOF on _DoubleTLS')
             res += run
         return res
@@ -903,6 +999,7 @@ class OuterBuffer(object):
                        v & ~_chunk_inner_mask, len(self.__inner_packets))
             else:
                 if v == 0:
+                    logging.error('🔴 [DOUBLE_TLS] Unexpected EOF on outer stream while reading header')
                     raise EOFError('Unexpected EOF on outer stream')
                 self.__outer_data += self.__recv_exact(v)
                 _debug('o%s: received %d outer data bytes', _id(self), v)

@@ -556,7 +556,8 @@ class ServersConnection(object):
         Raise RequestHandled.
 
         '''
-        logging.warning('Request authentication failed: %s', reason)
+        logging.error('🔴 AUTH FAILURE: %s', reason)
+        logging.error('🔴 AUTH FAILURE STACK TRACE:', exc_info=True)
         self.send_error(errors.AUTHENTICATION_FAILED, log_it=False)
 
     def _verify_username(self, outer_user):
@@ -575,26 +576,71 @@ class ServersConnection(object):
 
         Raise RequestHandled (on permission denied), InvalidRequestError.
         '''
+        logging.info('🔍 [AUTH] Starting authenticate_admin')
+        
         user = self.safe_outer_field('user')
+        logging.info('🔍 [AUTH] Extracted user field: %r', user)
         if user is None:
+            logging.error('🔴 [AUTH] User field is None/missing')
             self.auth_fail('user field missing')
+        
+        logging.info('🔍 [AUTH] Verifying username against certificate CN')
         self._verify_username(user)
+        logging.info('✅ [AUTH] Username verification passed')
+        
         password = self.inner_field('password')
+        logging.info('🔍 [AUTH] Extracted password field: %s', 
+                     'present' if password is not None else 'MISSING')
         if password is None:
+            logging.error('🔴 [AUTH] Password field is None/missing')
             self.auth_fail('password field missing')
+        
+        logging.info('🔍 [AUTH] Password field length (bytes): %d', len(password))
+        logging.info('🔍 [AUTH] Password hex: %s', password.hex())
+        
         password = password.decode('utf-8')
-        user = db.query(User).filter_by(name=user).first()
-        if user is not None and user.sha512_password is not None:
-            crypted_pw = user.sha512_password.decode('utf-8')
+        logging.info('🔍 [AUTH] Decoded password length (chars): %d', len(password))
+        logging.info('🔍 [AUTH] Decoded password repr: %r', password)
+        
+        logging.info('🔍 [AUTH] Querying database for user: %r', user)
+        user_obj = db.query(User).filter_by(name=user).first()
+        
+        if user_obj is not None:
+            logging.info('✅ [AUTH] User found in database: %s', user)
+            logging.info('🔍 [AUTH] User is admin: %s', user_obj.admin)
+            if user_obj.sha512_password is not None:
+                crypted_pw = user_obj.sha512_password.decode('utf-8')
+                logging.info('✅ [AUTH] User has password hash')
+                logging.info('🔍 [AUTH] Hash length: %d', len(crypted_pw))
+                logging.info('🔍 [AUTH] Hash starts with: %s', crypted_pw[:20])
+            else:
+                logging.error('🔴 [AUTH] User has NULL password in database!')
+                crypted_pw = 'xx'
         else:
+            logging.error('🔴 [AUTH] User NOT found in database: %r', user)
             # Perform the encryption anyway to make timing attacks more
             # difficult.
             crypted_pw = 'xx'
-        if (crypt.crypt(password, crypted_pw) != crypted_pw
-                or crypted_pw == 'xx'):
+        
+        logging.info('🔍 [AUTH] Computing crypt with password and stored hash')
+        computed_hash = crypt.crypt(password, crypted_pw)
+        logging.info('🔍 [AUTH] Computed hash: %s', computed_hash[:30])
+        logging.info('🔍 [AUTH] Expected hash: %s', crypted_pw[:30])
+        logging.info('🔍 [AUTH] Hashes match: %s', computed_hash == crypted_pw)
+        
+        if (computed_hash != crypted_pw or crypted_pw == 'xx'):
+            logging.error('🔴 [AUTH] Password verification FAILED')
+            logging.error('🔴 [AUTH] computed_hash == crypted_pw: %s', computed_hash == crypted_pw)
+            logging.error('🔴 [AUTH] crypted_pw == "xx": %s', crypted_pw == 'xx')
             self.auth_fail('password does not match')
-        if not user.admin:
+        
+        logging.info('✅ [AUTH] Password verification PASSED')
+        
+        if not user_obj.admin:
+            logging.error('🔴 [AUTH] User exists and password correct, but NOT an admin')
             self.auth_fail('user is not a server administrator')
+        
+        logging.info('✅ [AUTH] authenticate_admin SUCCESSFUL for user: %s', user)
         # OK
 
     def __authenticate_admin_or_user(self, db):

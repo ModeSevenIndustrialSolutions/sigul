@@ -140,10 +140,53 @@ def logging_level_from_options(options):
 
 
 def setup_logging(options, component):
-    logging.basicConfig(format='%(asctime)s %(levelname)s: %(message)s',
-                        level=logging_level_from_options(options),
-                        filename=os.path.join(options.log_dir,
-                                              'sigul_%s.log' % component))
+    log_file = os.path.join(options.log_dir, 'sigul_%s.log' % component)
+    
+    # Force logging configuration even if root logger already has handlers
+    # This is necessary because logging.basicConfig() only works if no handlers exist
+    root_logger = logging.getLogger()
+    
+    # Remove any existing handlers
+    for handler in root_logger.handlers[:]:
+        root_logger.removeHandler(handler)
+        handler.close()
+    
+    # Create file handler with proper formatting
+    file_handler = logging.FileHandler(log_file, mode='a')
+    file_handler.setLevel(logging_level_from_options(options))
+    formatter = logging.Formatter('%(asctime)s %(levelname)s: %(message)s')
+    file_handler.setFormatter(formatter)
+    
+    # Configure root logger
+    root_logger.setLevel(logging_level_from_options(options))
+    root_logger.addHandler(file_handler)
+    
+    # Also add console handler for immediate feedback
+    console_handler = logging.StreamHandler()
+    console_handler.setLevel(logging.INFO)
+    console_handler.setFormatter(formatter)
+    root_logger.addHandler(console_handler)
+    
+    # Immediately log to verify logging is working
+    logging.info('🔧 [LOGGING] Logging subsystem initialized')
+    logging.info('🔧 [LOGGING] Component: %s', component)
+    logging.info('🔧 [LOGGING] Log file: %s', log_file)
+    logging.info('🔧 [LOGGING] Log level: %s', logging_level_from_options(options))
+    
+    # Force flush to ensure logs are written immediately
+    file_handler.flush()
+    
+    try:
+        # Verify we can write to the log file
+        with open(log_file, 'a') as f:
+            pass
+        logging.info('✅ [LOGGING] Log file is writable')
+        file_handler.flush()
+    except Exception as e:
+        # This will go to stderr if file logging fails
+        print('ERROR: Cannot write to log file %s: %s' % (log_file, e))
+        logging.error('🔴 [LOGGING] Cannot write to log file: %s', e)
+        file_handler.flush()
 
 
 def create_basic_parser(description, default_config_file):
@@ -967,7 +1010,17 @@ def delete_pid_file(options, daemon_name):
     The options argument should come from get_daemon_options().
 
     '''
-    os.remove(os.path.join(options.pid_dir, daemon_name + '.pid'))
+    pid_file = os.path.join(options.pid_dir, daemon_name + '.pid')
+    try:
+        os.remove(pid_file)
+        logging.debug('🗑️ [PID_FILE] Successfully deleted PID file: %s', pid_file)
+    except PermissionError as e:
+        logging.warning('⚠️ [PID_FILE] Permission denied deleting PID file %s: %s', pid_file, e)
+        logging.warning('⚠️ [PID_FILE] This is a non-fatal error - server shutdown will continue')
+    except FileNotFoundError:
+        logging.debug('🗑️ [PID_FILE] PID file already deleted: %s', pid_file)
+    except Exception as e:
+        logging.warning('⚠️ [PID_FILE] Unexpected error deleting PID file %s: %s', pid_file, e)
 
 
 def sigterm_handler(*unused_args):
@@ -1109,7 +1162,12 @@ def log_exception(thread_name, exc_info, default_msg):
     elif isinstance(e, nss.error.NSPRError):
         if e.errno == nss.error.PR_CONNECT_RESET_ERROR:
             logging.error(prefix + 'I/O error: NSPR connection reset')
+            logging.error(prefix + '🔴 [LOG_EXCEPTION] PR_CONNECT_RESET_ERROR stack trace:', exc_info=exc_info)
         elif e.errno == nss.error.PR_END_OF_FILE_ERROR:
+            logging.error(prefix + '🔴 [LOG_EXCEPTION] PR_END_OF_FILE_ERROR caught!')
+            logging.error(prefix + '🔴 [LOG_EXCEPTION] Exception type: %s', type(e))
+            logging.error(prefix + '🔴 [LOG_EXCEPTION] Exception errno: %s', e.errno)
+            logging.error(prefix + '🔴 [LOG_EXCEPTION] Full stack trace:', exc_info=exc_info)
             logging.error(prefix + 'I/O error: Unexpected EOF in NSPR')
         else:
             logging.error(prefix + 'NSPR error', exc_info=exc_info)
@@ -1125,16 +1183,40 @@ def read_password(config, prompt):
     Raise EOFError.
 
     '''
+    import logging
+    logging.info('📖 [READ_PASSWORD] Starting read_password')
+    logging.info('📖 [READ_PASSWORD] Batch mode: %s', config.batch_mode)
+    logging.info('📖 [READ_PASSWORD] Prompt: %r', prompt)
+    
     if not config.batch_mode:
-        return getpass.getpass(prompt)
+        logging.info('📖 [READ_PASSWORD] Using getpass (interactive mode)')
+        password = getpass.getpass(prompt)
+        logging.info('📖 [READ_PASSWORD] Password received from getpass, length: %d', len(password))
+        return password
+    
+    logging.info('📖 [READ_PASSWORD] Reading from stdin (batch mode)')
     password = ''
+    char_count = 0
     while True:
         c = sys.stdin.read(1)
+        char_count += 1
+        logging.debug('📖 [READ_PASSWORD] Read char #%d: %r (hex: %s)', 
+                     char_count, c, c.encode('utf-8').hex() if c else 'EOF')
+        
         if c == '\x00':
+            logging.info('📖 [READ_PASSWORD] Found NUL terminator at position %d', char_count)
             break
         if c == '':
+            logging.error('🔴 [READ_PASSWORD] Unexpected EOF at position %d', char_count)
+            logging.error('🔴 [READ_PASSWORD] Password accumulated so far: %r (length: %d)', 
+                         password, len(password))
             raise EOFError('Unexpected EOF when reading a batch mode password')
         password += c
+    
+    logging.info('✅ [READ_PASSWORD] Password read successfully')
+    logging.info('📖 [READ_PASSWORD] Final password length: %d', len(password))
+    logging.info('📖 [READ_PASSWORD] Final password repr: %r', password)
+    logging.info('📖 [READ_PASSWORD] Final password hex: %s', password.encode('utf-8').hex())
     return password
 
 

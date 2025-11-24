@@ -1239,12 +1239,22 @@ class BridgeConnection(object):
     @staticmethod
     def handle_connection(config, client_sock, server_sock):
         '''Handle a single connection using client_sock and server_sock.'''
-        client_sock.force_handshake()
+        # Complete TLS handshake with client
+        # (Server handshake already completed in bridge_one_request)
+        logging.info('🤝 [BRIDGE_TLS] Starting TLS handshake with client')
+        try:
+            client_sock.force_handshake()
+            logging.info('✅ [BRIDGE_TLS] Client TLS handshake completed')
+        except Exception as e:
+            logging.error('🔴 [BRIDGE_TLS] Client handshake failed: %s', e)
+            raise
+        
         cert = client_sock.get_peer_certificate()
         if cert is None:
+            logging.error('🔴 [BRIDGE_TLS] No client certificate received')
             raise ForwardingError('No client certificate')
         user_name = cert.subject_common_name
-        logging.info('Client with CN %s connected', repr(user_name))
+        logging.info('✅ [BRIDGE_TLS] Client authenticated with CN: %s', repr(user_name))
         if (config.required_fas_group is not None
                 and not fas_user_is_in_group(config, user_name,
                                              config.required_fas_group)):
@@ -1412,12 +1422,32 @@ def bridge_one_request(config, server_listen_sock, client_listen_sock):
 
     try:
         client_sock = None
-        logging.debug('Waiting for the server to connect')
+        logging.info('🔌 [BRIDGE_REQUEST] Waiting for the server to connect')
         (server_sock, _) = server_listen_sock.accept()
-        # FIXME? authenticate the server
+        logging.info('✅ [BRIDGE_REQUEST] Server TCP connection accepted')
+        logging.debug('🔧 [BRIDGE_REQUEST] Server socket: %s', server_sock)
+        
+        # Complete server TLS handshake immediately to avoid timeout
+        logging.info('🤝 [BRIDGE_TLS] Starting TLS handshake with server')
         try:
-            logging.debug('Waiting for the client to connect')
+            server_sock.force_handshake()
+            logging.info('✅ [BRIDGE_TLS] Server TLS handshake completed')
+        except Exception as e:
+            logging.error('🔴 [BRIDGE_TLS] Server handshake failed: %s', e)
+            raise
+        
+        # Authenticate server certificate
+        server_cert = server_sock.get_peer_certificate()
+        if server_cert is None:
+            logging.error('🔴 [BRIDGE_TLS] No server certificate received')
+            raise ForwardingError('No server certificate')
+        server_cn = server_cert.subject_common_name
+        logging.info('✅ [BRIDGE_TLS] Server authenticated with CN: %s', repr(server_cn))
+        
+        try:
+            logging.info('🔌 [BRIDGE_REQUEST] Waiting for the client to connect')
             (client_sock, _) = client_listen_sock.accept()
+            logging.info('✅ [BRIDGE_REQUEST] Client connected')
             try:
                 BridgeConnection.handle_connection(config, client_sock,
                                                    server_sock)
@@ -1457,8 +1487,11 @@ def main():
     options = utils.get_daemon_options('A signing server bridge',
                                        '~/.sigul/bridge.conf')
     utils.setup_logging(options, 'bridge')
+    logging.info('🚀 [BRIDGE] Sigul Bridge starting')
+    logging.info('🚀 [BRIDGE] Configuration file: %s', options.config_file)
     try:
         config = BridgeConfiguration(options.config_file)
+        logging.info('✅ [BRIDGE] Configuration loaded successfully')
     except utils.ConfigurationError as e:
         sys.exit(str(e))
 
@@ -1488,16 +1521,23 @@ def main():
 
     try:
         try:
+            logging.info('🔐 [BRIDGE] Initializing NSS')
             try:
                 utils.nss_init(config)
+                logging.info('✅ [BRIDGE] NSS initialized successfully')
             except utils.NSSInitError as e:
                 logging.error(str(e))
                 sys.exit(1)
+            logging.info('🔌 [BRIDGE] Creating listen sockets')
+            logging.info('🔌 [BRIDGE] Server port: %d', config.server_listen_port)
+            logging.info('🔌 [BRIDGE] Client port: %d', config.client_listen_port)
             try:
                 server_listen_sock = \
                     create_listen_sock(config, config.server_listen_port)
+                logging.info('✅ [BRIDGE] Server listen socket created on port %d', config.server_listen_port)
                 client_listen_sock = \
                     create_listen_sock(config, config.client_listen_port)
+                logging.info('✅ [BRIDGE] Client listen socket created on port %d', config.client_listen_port)
             except nss.error.NSPRError as e:
                 logging.error('NSPR error: {0!s}'.format(str(e)))
                 sys.exit(1)
@@ -1505,10 +1545,13 @@ def main():
                 logging.error(str(e))
                 sys.exit(1)
 
+            logging.info('🎯 [BRIDGE] Entering main request loop')
+            logging.info('🎯 [BRIDGE] Bridge is ready to accept connections')
             while True:
                 # This loop can unfortunately not be interrupted using SIGINT,
                 # see https://bugzilla.redhat.com/show_bug.cgi?id=707382 for
                 # an explanation.
+                logging.debug('🔄 [BRIDGE] Waiting for next request')
                 bridge_one_request(config, server_listen_sock,
                                    client_listen_sock)
         except (KeyboardInterrupt, SystemExit):
